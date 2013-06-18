@@ -13,23 +13,28 @@
    [pallet.crate.upstart :as upstart]))
 
 (deftest invoke-test
+  ;; (is (build-actions/build-actions {}
+  ;;                                  (riemann/settings {:supervisor :nohup})
+  ;;                                  (riemann/install {})
+  ;;                                  (riemann/configure {})
+  ;;                                  (riemann/service)))
   (is (build-actions/build-actions {}
-        (riemann/settings {:supervisor :nohup})
-        (riemann/install {})
-        (riemann/configure {})
-        (riemann/service)))
+                                   (riemann/settings {:supervisor :runit})
+                                   (riemann/install {})
+                                   (riemann/configure {})
+                                   (riemann/service)))
   (is (build-actions/build-actions {}
-        (riemann/settings {:supervisor :runit})
-        (riemann/install {})
-        (riemann/configure {})
-        (riemann/service))))
+                                   (riemann/settings {:supervisor :upstart})
+                                   (riemann/install {})
+                                   (riemann/configure {})
+                                   (riemann/service))))
 
-(def live-nohup-test-spec
-  (server-spec
-   :extends [(java/server-spec {})
-             (riemann/server-spec {:supervisor :nohup})]
-   :phases {:install (plan-fn (package-manager :update))
-            :test (plan-fn (wait-for-port-listen 5555))}))
+;; (def live-nohup-test-spec
+;;    (server-spec
+;;     :extends [(java/server-spec {})
+;;               (riemann/server-spec {:supervisor :nohup})]
+;;     :phases {:install (plan-fn (package-manager :update))
+;;              :test (plan-fn (wait-for-port-listen 5555))}))
 
 (def live-runit-test-spec
   (server-spec
@@ -38,8 +43,8 @@
              (riemann/server-spec {:supervisor :runit})]
    :phases {:install (plan-fn (package-manager :update))
             :test (plan-fn
-                    (riemann/service :action :start)
-                    (wait-for-port-listen 5555))}))
+                   (riemann/service :action :start)
+                   (wait-for-port-listen 5555))}))
 
 (def live-upstart-test-spec
   (server-spec
