@@ -1,5 +1,5 @@
-(ns pallet.crate.riemann
-  "A pallet crate to install and configure riemann"
+(ns pallet.crate.titan
+  "A pallet crate to install and configure titan"
   (:require
    [clojure.tools.logging :refer [debugf]]
    [clojure.pprint :refer [pprint]]
@@ -23,69 +23,56 @@
 
 
 (def ^{:doc "Flag for recognising changes to configuration"}
-  riemann-config-changed-flag "riemann-config")
+  titan-config-changed-flag "titan-config")
 
 ;;; # Settings
 (defn service-name
-  "Return a service name for riemann."
+  "Return a service name for titan."
   [{:keys [instance-id] :as options}]
-  (str "riemann" (when instance-id (str "-" instance-id))))
+  (str "titan" (when instance-id (str "-" instance-id))))
 
 (defn default-settings [options]
-  {:version "0.1.5"
-   :user "riemann"
-   :owner "riemann"
-   :group "riemann"
-   :home "/opt/riemann"
-   :config-dir (fragment (file (config-root) "riemann"))
-   :log-dir (fragment (file (log-root) "riemann"))
+  {:version "0.3.1"
+   :user "titan"
+   :owner "titan"
+   :group "titan"
+   :home "/opt/titan"
+   :dist-url "http://s3.thinkaurelius.com/downloads/titan/titan-%s-%s.zip"
+   :backend "all"
+   :config-dir (fragment (file (config-root) "titan"))
+   :log-dir (fragment (file (log-root) "titan"))
    :supervisor :nohup
    :nohup {:process-name "java"}
    :service-name (service-name options)
-   :dist-url "http://aphyr.com/riemann/riemann-%s.tar.bz2"
-   :deb-url "http://aphyr.com/riemann/riemann_%s_all.deb"
    :variables {:listen-host  "0.0.0.0"
-               :log-file     "/var/log/riemann.log"
+               :log-file     "/var/log/titan.log"
                :need-expire  true
                :expire-every 10
                :need-tcp     true
-               :tcp-port     5555
-               :need-udp     true
-               :udp-port     5555
-               :need-ws      true
-               :ws-port      5556
-               :need-repl    true
-               :repl-port    5557}
+               :tcp-port     8182
+               :need-udp     true}
    :config '(let [index (default {:state "ok"
                                   :ttl   3600}
                           (update-index (index)))]
               (streams
                (with :service "events per sec"
                      (rate 30 index))
-               index))
-   :base-config '(do
-                   (logging/init :file :log-file)
-                   (when :need-tcp
-                     (tcp-server :host :listen-host :port :tcp-port))
-                   (when :need-udp
-                     (tcp-server :host :listen-host :port :udp-port))
-                   (when :need-ws
-                     (tcp-server :host :listen-host :port :ws-port))
-                   (when :need-repl
-                     (tcp-server :host :listen-host :port :repl-port))
-                   (when :need-expire
-                     (periodically-expire :expire-every))
-                   :config)})
+               index))})
 
 (defn url
-  [{:keys [dist-url version] :as settings}]
-  {:pre [dist-url version]}
-  (format dist-url version))
+  [{:keys [dist-url backend version] :as settings}]
+  {:pre [dist-url backend version]}
+  (format dist-url backend version))
 
 (defn run-command
-  "Return a script command to run riemann."
-  [{:keys [home user config-dir] :as settings}]
-  (fragment ((file ~home "bin" "riemann") (file ~config-dir "riemann.conf"))))
+  "Return a script command to run titan."
+  [{:keys [home user config-dir backend version] :as settings}]
+  (let [server (str "titan-" backend "-" version)]
+    (fragment 
+     ("cd" ~server)
+     ((file "bin" "titan.sh") 
+      (file "config" "titan-server-rexster.xml")
+      (file "config" "titan-server-cassandra.properties")))))
 
 ;;; At the moment we just have a single implementation of settings,
 ;;; but this is open-coded.
@@ -99,29 +86,28 @@
    :else  (assoc settings
             :install-strategy ::download
             :remote-file {:url (url settings)
-                          :md5-url (str (url settings) ".md5")
-                          :tar-options "xj"})))
+                          :unpack :unzip})))
 
 
-(defmethod supervisor-config-map [:riemann :runit]
+(defmethod supervisor-config-map [:titan :runit]
   [_ {:keys [run-command service-name user] :as settings} options]
   {:service-name service-name
    :run-file {:content (str "#!/bin/sh\nexec chpst -u " user " " run-command)}})
 
-(defmethod supervisor-config-map [:riemann :upstart]
+(defmethod supervisor-config-map [:titan :upstart]
   [_ {:keys [run-command service-name user] :as settings} options]
   {:service-name service-name
    :exec run-command
    :setuid user})
 
-(defmethod supervisor-config-map [:riemann :nohup]
+(defmethod supervisor-config-map [:titan :nohup]
   [_ {:keys [run-command service-name user] :as settings} options]
   {:service-name service-name
    :run-file {:content run-command}
    :user user})
 
 (defplan settings
-  "Settings for riemann"
+  "Settings for titan"
   [{:keys [user owner group dist dist-urls version instance-id]
     :as settings}
    & {:keys [instance-id] :as options}]
@@ -129,14 +115,14 @@
         settings (settings-map (:version settings) settings)
         settings (update-in settings [:run-command]
                             #(or % (run-command settings)))]
-    (assoc-settings :riemann settings {:instance-id instance-id})
-    (supervisor-config :riemann settings (or options {}))))
+    (assoc-settings :titan settings {:instance-id instance-id})
+    (supervisor-config :titan settings (or options {}))))
 
 ;;; # User
 (defplan user
-  "Create the riemann user"
+  "Create the titan user"
   [{:keys [instance-id] :as options}]
-  (let [{:keys [user owner group home]} (get-settings :riemann options)]
+  (let [{:keys [user owner group home]} (get-settings :titan options)]
     (actions/group group :system true)
     (when (not= owner user)
       (actions/user owner :group group :system true))
@@ -148,16 +134,16 @@
   [facility instance-id]
   (let [{:keys [user owner group home remote-file] :as settings}
         (get-settings facility {:instance-id instance-id})]
-    (packages :apt ["bzip2"] :aptitude ["bzip2"])
+    (packages :apt ["bzip2" "unzip"] :aptitude ["bzip2" "unzip"])
     (directory home :owner owner :group group)
     (apply-map remote-directory home :owner owner :group group remote-file)))
 
 (defplan install
-  "Install riemann."
+  "Install titan."
   [{:keys [instance-id]}]
   (let [{:keys [install-strategy owner group log-dir] :as settings}
-        (get-settings :riemann {:instance-id instance-id})]
-    (crate-install/install :riemann instance-id)
+        (get-settings :titan {:instance-id instance-id})]
+    (crate-install/install :titan instance-id)
     (when log-dir
       (directory log-dir :owner owner :group group :mode "0755"))))
 
@@ -168,39 +154,39 @@
   (directory config-dir :owner owner :group group)
   (apply-map
    remote-file (fragment (file ~config-dir ~filename))
-   :flag-on-changed riemann-config-changed-flag
+   :flag-on-changed titan-config-changed-flag
    :owner owner :group group
    file-source))
 
 (defplan configure
   "Write all config files"
   [{:keys [instance-id] :as options}]
-  (let [settings (get-settings :riemann options)
+  (let [settings (get-settings :titan options)
         {:keys [config variables base-config] :as settings} settings
         config (postwalk-replace variables config)
         variables (assoc variables :config config)
         config (postwalk-replace variables base-config)]
     (debugf "configure %s %s" settings options)
-    (config-file settings "riemann.conf"
+    (config-file settings "titan.conf"
                  {:content (with-out-str (pprint config))})))
 
 ;;; # Run
 (defplan service
-  "Run the riemann service."
+  "Run the titan service."
   [& {:keys [action if-flag if-stopped instance-id]
       :or {action :manage}
       :as options}]
   (let [{:keys [supervision-options] :as settings}
-        (get-settings :riemann {:instance-id instance-id})]
+        (get-settings :titan {:instance-id instance-id})]
     (service/service settings (merge supervision-options
                                      (dissoc options :instance-id)))))
 
 (defn server-spec
-  "Returns a server-spec that installs and configures riemann."
+  "Returns a server-spec that installs and configures titan."
   [settings & {:keys [instance-id] :as options}]
   (api/server-spec
    :phases
-   (merge {:settings (plan-fn (pallet.crate.riemann/settings (merge settings options)))
+   (merge {:settings (plan-fn (pallet.crate.titan/settings (merge settings options)))
            :install (plan-fn
                       (user options)
                       (install options))
@@ -209,4 +195,4 @@
                         (apply-map service :action :enable options))
            :run (plan-fn
                   (apply-map service :action :start options))}
-          (service-phases :riemann options service))))
+          (service-phases :titan options service))))
