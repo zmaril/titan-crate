@@ -65,14 +65,11 @@
   (format dist-url backend version))
 
 (defn run-command
-  "Return a script command to run titan."
-  [{:keys [home user config-dir backend version] :as settings}]
-  (let [server (str "titan-" backend "-" version)]
-    (fragment 
-     ("cd" ~server)
-     ((file "bin" "titan.sh") 
-      (file "config" "titan-server-rexster.xml")
-      (file "config" "titan-server-cassandra.properties")))))
+  "Return a script command to run riemann."
+  [{:keys [home user config-dir] :as settings}]  
+  (fragment ((file "bin" "titan.sh") 
+             (file "config" "titan-server-rexster.xml") 
+             (file "config" "titan-server-cassandra.properties"))))
 
 ;;; At the moment we just have a single implementation of settings,
 ;;; but this is open-coded.
@@ -89,22 +86,25 @@
                           :unpack :unzip})))
 
 
+(defmethod supervisor-config-map [:titan :nohup]
+  [_ {:keys [run-command service-name user] :as settings} options]
+  {:service-name service-name
+   :run-file {:content run-command}
+   :user user})
+
 (defmethod supervisor-config-map [:titan :runit]
   [_ {:keys [run-command service-name user] :as settings} options]
   {:service-name service-name
    :run-file {:content (str "#!/bin/sh\nexec chpst -u " user " " run-command)}})
 
 (defmethod supervisor-config-map [:titan :upstart]
-  [_ {:keys [run-command service-name user] :as settings} options]
+  [_ {:keys [run-command service-name user
+             home backend version] 
+      :as settings} options]
   {:service-name service-name
    :exec run-command
+   :chdir (str home "/" (format "titan-%s-%s" backend version))
    :setuid user})
-
-(defmethod supervisor-config-map [:titan :nohup]
-  [_ {:keys [run-command service-name user] :as settings} options]
-  {:service-name service-name
-   :run-file {:content run-command}
-   :user user})
 
 (defplan settings
   "Settings for titan"
@@ -192,7 +192,8 @@
                       (install options))
            :configure (plan-fn
                         (configure options)
-                        (apply-map service :action :enable options))
+;;                        (apply-map service :action :enable options)
+                        )
            :run (plan-fn
                   (apply-map service :action :start options))}
           (service-phases :titan options service))))

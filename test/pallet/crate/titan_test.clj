@@ -12,30 +12,34 @@
    [pallet.crate.runit :as runit]
    [pallet.crate.upstart :as upstart]))
 
-(deftest invoke-test
-  ;; (is (build-actions/build-actions {}
-  ;;                                  (titan/settings {:supervisor :nohup})
-  ;;                                  (titan/install {})
-  ;;                                  (titan/configure {})
-  ;;                                  (titan/service)))
-  (is (build-actions/build-actions {}
-                                   (titan/settings {:supervisor :runit})
-                                   (titan/install {})
-                                   (titan/configure {})
-                                   (titan/service)))
-  ;; (is (build-actions/build-actions {}
-  ;;                                  (titan/settings {:supervisor :upstart})
-  ;;                                  (titan/install {})
-  ;;                                  (titan/configure {})
-  ;;                                  (titan/service)))
-)
+(deftest invoke-test  
+  (comment  
+    (is
+     (build-actions/build-actions 
+      {}
+      (titan/settings {:supervisor :nohup})
+      (titan/install {})
+      (titan/configure {})
+      (titan/service)))) 
+  (is (build-actions/build-actions 
+       {}
+       (titan/settings {:supervisor :runit})
+       (titan/install {})
+       (titan/configure {})
+       (titan/service)))
+  (is (build-actions/build-actions 
+       {}
+       (titan/settings {:supervisor :upstart})
+       (titan/install {})
+       (titan/configure {})
+       (titan/service))))
 
-;; (def live-nohup-test-spec
-;;    (server-spec
-;;     :extends [(java/server-spec {})
-;;               (titan/server-spec {:supervisor :nohup})]
-;;     :phases {:install (plan-fn (package-manager :update))
-;;              :test (plan-fn (wait-for-port-listen 5555))}))
+(def live-nohup-test-spec
+   (server-spec
+    :extends [(java/server-spec {})
+              (titan/server-spec {:supervisor :nohup})]
+    :phases {:install (plan-fn (package-manager :update))
+             :test (plan-fn (wait-for-port-listen 8182))}))
 
 (def live-runit-test-spec
   (server-spec
@@ -47,12 +51,12 @@
                    (titan/service :action :start)
                    (wait-for-port-listen 8182))}))
 
-;; (def live-upstart-test-spec
-;;   (server-spec
-;;    :extends [(java/server-spec {})
-;;              (upstart/server-spec {})
-;;              (titan/server-spec {:supervisor :upstart})]
-;;    :phases {:install (plan-fn (package-manager :update))
-;;             :test (plan-fn
-;;                     (titan/service :action :start)
-;;                     (wait-for-port-listen 5555))}))
+(def live-upstart-test-spec
+  (server-spec
+   :extends [(java/server-spec {})
+             (upstart/server-spec {})
+             (titan/server-spec {:supervisor :upstart})]
+   :phases {:install (plan-fn (package-manager :update))
+            :test (plan-fn
+                    (titan/service :action :start)
+                    (wait-for-port-listen 8182))}))
