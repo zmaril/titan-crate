@@ -72,6 +72,7 @@
    :log-dir (fragment (file (log-root) "titan"))
    :supervisor :nohup
    :nohup {:process-name "java"}
+   :jvm-opts ""
    :service-name (service-name options)
    :variables {:listen-host  "0.0.0.0"
                :log-file     "/var/log/titan.log"
@@ -122,11 +123,12 @@
 
 (defmethod supervisor-config-map [:titan :upstart]
   [_ {:keys [run-command service-name user
-             home backend version] 
+             home backend version jvm-opts] 
       :as settings} options]
   {:service-name service-name
    :exec run-command
    :chdir (titan-server-dir settings)
+   :env (str "JAVA_OPTIONS=" "\"" jvm-opts "\"")
    :setuid user})
 
 (defplan settings
