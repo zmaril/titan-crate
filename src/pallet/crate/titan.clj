@@ -9,20 +9,19 @@
    [pallet.actions :as actions
     :refer [directory exec-checked-script packages remote-directory
             remote-file]]
-   [pallet.node :refer [primary-ip]]
+   [pallet.node :refer [primary-ip private-ip]]
    [pallet.api :refer [plan-fn] :as api]
    [pallet.crate :refer [assoc-settings defmethod-plan defplan get-settings
-                         service-phases target-nodes]]
+                         service-phases target-nodes target-node]]
    [pallet.crate-install :as crate-install]
    [pallet.crate.nohup]
    [pallet.crate.service
     :refer [supervisor-config supervisor-config-map] :as service]
-   [pallet.utils :refer [apply-map]]
+   [pallet.utils :refer [apply-map deep-merge]]
    [pallet.script.lib :refer [config-root file log-root]]
    [pallet.stevedore :refer [fragment]]
    [pallet.version-dispatch :refer [defmethod-version-plan
                                     defmulti-version-plan]]))
-
 
 (def ^{:doc "Flag for recognising changes to configuration"}
   titan-config-changed-flag "titan-config")
@@ -53,7 +52,7 @@
    ;;TODO:put in all defaults here
    :titan-config 
    {:storage.backend        "embeddedcassandra"
-    :storage.directory      "/var/lib/titandb"
+    :storage.directory      "/opt/titan/titandb"
     :storage.cassandra-config-dir  "file:///etc/titan/cassandra.yaml"
     :storage.read-only      false
     :storage.batch-loading  false
@@ -70,14 +69,14 @@
     :authority "org.apache.cassandra.auth.AllowAllAuthority"
     :cluster_name "titan-cluster"
     :column_index_size_in_kb 64
-    :commitlog_directory "/mnt/cassandra/commitlog"
+    :commitlog_directory "/opt/titan/cassandra/commitlog"
     :commitlog_sync "periodic"
     :commitlog_sync_period_in_ms 10000
     :commitlog_total_space_in_mb 4096
     :compaction_preheat_key_cache true
     :concurrent_reads 32
     :concurrent_writes 32
-    :data_file_directories ["/mnt/cassandra/data"]
+    :data_file_directories ["/opt/titan/cassandra/data"]
     :dynamic_snitch_badness_threshold 0.1
     :dynamic_snitch_reset_interval_in_ms 600000
     :dynamic_snitch_update_interval_in_ms 100
@@ -93,6 +92,8 @@
     :incremental_backups false
     :index_interval 128
     :initial_token nil
+    :key_cache_save_period 14440
+    :key_cache_size_in_mb nil
     :max_hint_window_in_ms 3600000
     :memtable_flush_queue_size 4
     :memtable_total_space_in_mb 2048
@@ -100,15 +101,18 @@
     :partitioner "org.apache.cassandra.dht.RandomPartitioner"
     :reduce_cache_capacity_to 0.6
     :reduce_cache_sizes_at 0.85
-    :request_scheduler "org.apache.cassandra.scheduler.NoScheduler"
+    :request_scheduler "org.apache.cassandra.scheduler.NoScheduler"    
     :rpc_keepalive true
     :rpc_port 9160
     :rpc_server_type "sync"
-    :saved_caches_directory "/mnt/cassandra/saved_caches"
+    :row_cache_provider "SerializingCacheProvider"
+    :row_cache_save_period 0
+    :saved_caches_directory "/opt/titan/cassandra/saved_caches"
     :seed_provider [{:class_name "org.apache.cassandra.locator.SimpleSeedProvider"
                      :parameters [{:seeds "127.0.0.1"}]}]
     :snapshot_before_compaction false
     :storage_port 7000
+    :ssl_storage_port 7001
     :thrift_framed_transport_size_in_mb 15
     :thrift_max_message_length_in_mb 16}
    :user "titan"
@@ -122,7 +126,7 @@
    :jvm-opts ""
    :service-name (service-name options)
    :variables {:listen-host  "0.0.0.0"
-               :log-file     "/var/log/titan.log"
+               :log-file     "/opt/titan/log/titan.log"
                :need-expire  true
                :expire-every 10
                :need-tcp     true
@@ -171,7 +175,7 @@
   [{:keys [user owner group dist dist-urls version instance-id]
     :as settings}
    & {:keys [instance-id] :as options}]
-  (let [settings (merge-with merge (default-settings options) settings)
+  (let [settings (deep-merge (default-settings options) settings)
         settings (settings-map (:version settings) settings)
         settings (update-in settings [:run-command]
                             #(or % (run-command settings)))]
@@ -214,7 +218,7 @@
   (directory config-dir :owner owner :group group)
   (apply-map
    remote-file (fragment (file ~config-dir ~filename))
-   :flag-on-changed titan-config-changed-flag
+   :no-versioning true
    :owner owner :group group
    file-source))
 
@@ -228,9 +232,14 @@
   [{:keys [instance-id] :as options}]
   (let [{:keys [titan-config cassandra-config] :as settings}
         (get-settings :titan options)
+        ip               (or (private-ip (target-node)) (primary-ip (target-node)))
         ips              (clojure.string/join "," (map primary-ip (target-nodes)))
+
         titan-config     (assoc titan-config :storage.hostname ips)
-        cassandra-config (assoc-in cassandra-config [:seed_provider 0 :parameters 0 :seeds] ips)]
+        cassandra-config (assoc-in cassandra-config [:seed_provider 0 :parameters 0 :seeds] ips)        
+        cassandra-config (assoc cassandra-config 
+                           :listen_address ip
+                           :rpc_address ip)]
     (debugf "configure %s %s" settings options)
 
     (debugf "configure titan.properties")
@@ -239,7 +248,9 @@
 
     (debugf "configure cassandra.yaml")
     (config-file settings "cassandra.yaml" 
-                 {:content (yaml/generate-string cassandra-config)})))
+                 {:content (yaml/generate-string 
+                            cassandra-config
+                            :dumper-options {:flow-style :block})})))
 
 ;;; # Run
 (defplan service

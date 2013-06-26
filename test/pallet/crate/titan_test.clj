@@ -23,11 +23,7 @@
    :extends [(java/server-spec {})
              (upstart/server-spec {})
              (titan/server-spec {:supervisor :upstart
-                                 :jvm-opts "-Xms512m -Xmx1G"
-                                 :cassandra-config 
-                                 {:commitlog_directory "/var/cassandra/commitlog"
-                                  :data_file_directories ["/var/cassandra/data"]
-                                  :saved_caches_directory "/var/cassandra/saved_caches"}})]
+                                 :jvm-opts "-Xms512m -Xmx1G"})]
    :phases {:install 
             (plan-fn 
              (package-manager :update))
