@@ -4,6 +4,7 @@
    [clojure.tools.logging :refer [debugf]]
    [clojure.pprint :refer [pprint]]
    [clojure.walk :refer [postwalk-replace]]
+   [clj-yaml.core :as yaml]
    [pallet.action :refer [with-action-options]]
    [pallet.actions :as actions
     :refer [directory exec-checked-script packages remote-directory
@@ -50,19 +51,66 @@
 (defn default-settings [options]
   {:version "0.3.1"   
    ;;TODO:put in all defaults here
-   :config {:storage.backend        "embeddedcassandra"
-            :storage.directory      "/var/lib/titandb"
-            :storage.cassandra-config-dir  "file:///opt/titan/titan-cassandra-0.3.1/config/cassandra.yaml"
-            :storage.read-only      false
-            :storage.batch-loading  false
-            :storage.buffer-size    1024
-            :storage.write-attempts 5
-            :storage.read-attempts  3
-            :storage.attempt-wait   250 
-            :ids.block-size         10000
-            :ids.flush              true
-            :ids.renew-timeout      60000
-            :ids.renew-percentage   0.3}
+   :titan-config 
+   {:storage.backend        "embeddedcassandra"
+    :storage.directory      "/var/lib/titandb"
+    :storage.cassandra-config-dir  "file:///etc/titan/cassandra.yaml"
+    :storage.read-only      false
+    :storage.batch-loading  false
+    :storage.buffer-size    1024
+    :storage.write-attempts 5
+    :storage.read-attempts  3
+    :storage.attempt-wait   250 
+    :ids.block-size         10000
+    :ids.flush              true
+    :ids.renew-timeout      60000
+    :ids.renew-percentage   0.3}
+   :cassandra-config
+   {:authenticator "org.apache.cassandra.auth.AllowAllAuthenticator"
+    :authority "org.apache.cassandra.auth.AllowAllAuthority"
+    :cluster_name "titan-cluster"
+    :column_index_size_in_kb 64
+    :commitlog_directory "/mnt/cassandra/commitlog"
+    :commitlog_sync "periodic"
+    :commitlog_sync_period_in_ms 10000
+    :commitlog_total_space_in_mb 4096
+    :compaction_preheat_key_cache true
+    :concurrent_reads 32
+    :concurrent_writes 32
+    :data_file_directories ["/mnt/cassandra/data"]
+    :dynamic_snitch_badness_threshold 0.1
+    :dynamic_snitch_reset_interval_in_ms 600000
+    :dynamic_snitch_update_interval_in_ms 100
+    :encryption_options {:internode_encryption "none"
+                         :keystore "conf/.keystore"
+                         :keystore_password "cassandra"
+                         :truststore "conf/.truststore"
+                         :truststore_password "cassandra"}
+    :endpoint_snitch "org.apache.cassandra.locator.SimpleSnitch"
+    :flush_largest_memtables_at 0.75
+    :hinted_handoff_enabled true
+    :in_memory_compaction_limit_in_mb 64
+    :incremental_backups false
+    :index_interval 128
+    :initial_token nil
+    :max_hint_window_in_ms 3600000
+    :memtable_flush_queue_size 4
+    :memtable_total_space_in_mb 2048
+    :multithreaded_compaction false
+    :partitioner "org.apache.cassandra.dht.RandomPartitioner"
+    :reduce_cache_capacity_to 0.6
+    :reduce_cache_sizes_at 0.85
+    :request_scheduler "org.apache.cassandra.scheduler.NoScheduler"
+    :rpc_keepalive true
+    :rpc_port 9160
+    :rpc_server_type "sync"
+    :saved_caches_directory "/mnt/cassandra/saved_caches"
+    :seed_provider [{:class_name "org.apache.cassandra.locator.SimpleSeedProvider"
+                     :parameters [{:seeds "127.0.0.1"}]}]
+    :snapshot_before_compaction false
+    :storage_port 7000
+    :thrift_framed_transport_size_in_mb 15
+    :thrift_max_message_length_in_mb 16}
    :user "titan"
    :owner "titan"
    :group "titan"
@@ -70,8 +118,7 @@
    :dist-url "http://s3.thinkaurelius.com/downloads/titan/titan-%s-%s.zip"
    :config-dir (config-dir)
    :log-dir (fragment (file (log-root) "titan"))
-   :supervisor :nohup
-   :nohup {:process-name "java"}
+   :supervisor :upstart
    :jvm-opts ""
    :service-name (service-name options)
    :variables {:listen-host  "0.0.0.0"
@@ -109,18 +156,6 @@
             :remote-file {:url (url settings)
                           :unpack :unzip})))
 
-
-(defmethod supervisor-config-map [:titan :nohup]
-  [_ {:keys [run-command service-name user] :as settings} options]
-  {:service-name service-name
-   :run-file {:content run-command}
-   :user user})
-
-(defmethod supervisor-config-map [:titan :runit]
-  [_ {:keys [run-command service-name user] :as settings} options]
-  {:service-name service-name
-   :run-file {:content (str "#!/bin/sh\nexec chpst -u " user " " run-command)}})
-
 (defmethod supervisor-config-map [:titan :upstart]
   [_ {:keys [run-command service-name user
              home backend version jvm-opts] 
@@ -136,7 +171,7 @@
   [{:keys [user owner group dist dist-urls version instance-id]
     :as settings}
    & {:keys [instance-id] :as options}]
-  (let [settings (merge (default-settings options) settings)
+  (let [settings (merge-with merge (default-settings options) settings)
         settings (settings-map (:version settings) settings)
         settings (update-in settings [:run-command]
                             #(or % (run-command settings)))]
@@ -191,12 +226,20 @@
 (defplan configure
   "Write all config files"
   [{:keys [instance-id] :as options}]
-  (let [{:keys [config] :as settings} (get-settings :titan options)
-        ips (map primary-ip (target-nodes))
-        config (assoc config :storage.hostname (clojure.string/join "," ips))]
+  (let [{:keys [titan-config cassandra-config] :as settings}
+        (get-settings :titan options)
+        ips              (clojure.string/join "," (map primary-ip (target-nodes)))
+        titan-config     (assoc titan-config :storage.hostname ips)
+        cassandra-config (assoc-in cassandra-config [:seed_provider 0 :parameters 0 :seeds] ips)]
     (debugf "configure %s %s" settings options)
+
+    (debugf "configure titan.properties")
     (config-file settings "titan.properties"
-                 {:content (with-out-str (print (map-to-conf config)))})))
+                 {:content (with-out-str (print (map-to-conf titan-config)))})
+
+    (debugf "configure cassandra.yaml")
+    (config-file settings "cassandra.yaml" 
+                 {:content (yaml/generate-string cassandra-config)})))
 
 ;;; # Run
 (defplan service
