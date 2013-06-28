@@ -24,15 +24,11 @@
              (upstart/server-spec {})
              (titan/server-spec {:supervisor :upstart
                                  :jvm-opts "-Xms512m -Xmx1G"})]
-   :phases {:install 
-            (plan-fn 
-             (package-manager :update))
-            :test-start 
+   :phases {:test-indie
             (plan-fn
-             (titan/service :action :start)
              (wait-for-port-listen 8182 
-                                   :standoff 5 
-                                   :max-retries 5))
+                                   :standoff 10
+                                   :max-retries 10))
             :test-create-vertex 
             (plan-fn
              (wait-for-http-response

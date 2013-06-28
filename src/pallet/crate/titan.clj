@@ -15,6 +15,7 @@
                          service-phases target-nodes target-node]]
    [pallet.crate-install :as crate-install]
    [pallet.crate.nohup]
+   [pallet.crate.cassandra :as cassie]
    [pallet.crate.service
     :refer [supervisor-config supervisor-config-map] :as service]
    [pallet.utils :refer [apply-map deep-merge]]
@@ -118,6 +119,7 @@
    :user "titan"
    :owner "titan"
    :group "titan"
+   :max-seeds 1
    :home "/opt/titan"
    :dist-url "http://s3.thinkaurelius.com/downloads/titan/titan-%s-%s.zip"
    :config-dir (config-dir)
@@ -140,7 +142,7 @@
           version))
 
 (defn run-command
-  "Return a script command to run riemann."
+  "Return a script command to run titan."
   [{:keys [home user config-dir] :as settings}]  
   (fragment ((file "bin" "titan.sh") 
              (file "config" "titan-server-rexster.xml") 
@@ -227,19 +229,28 @@
        (map (fn [[k v]] (str (name k) "=" v)))
        (clojure.string/join "\n")))
 
+(defn computed-settings
+  "Update settings with cluster specific values."
+  [{:keys [max-seeds cassandra-config]
+    :as settings}]
+  (let [ip (or (private-ip (target-node)) (primary-ip (target-node)))
+        algo (or (:rpc-address-algo settings) (cassie/rpc-address-algo))
+        defaults {:rpc_address (cassie/node-rpc-address algo (target-node))
+                  :listen_address ip
+                  :endpoint_snitch (cassie/endpoint-snitch)
+                  :initial_token (cassie/initial-token cassie/tokens nil)}
+        merge-function (fn [m] 
+                         (assoc-in (merge defaults m)
+                                   [:seed_provider 0 :parameters 0 :seeds]
+                                   (cassie/seeds-list max-seeds false)))]
+    (debugf "computed-settings defaults %s" defaults)
+    (update-in settings [:cassandra-config] merge-function)))
+
 (defplan configure
   "Write all config files"
   [{:keys [instance-id] :as options}]
   (let [{:keys [titan-config cassandra-config] :as settings}
-        (get-settings :titan options)
-        ip               (or (private-ip (target-node)) (primary-ip (target-node)))
-        ips              (clojure.string/join "," (map primary-ip (target-nodes)))
-
-        titan-config     (assoc titan-config :storage.hostname ips)
-        cassandra-config (assoc-in cassandra-config [:seed_provider 0 :parameters 0 :seeds] ips)        
-        cassandra-config (assoc cassandra-config 
-                           :listen_address ip
-                           :rpc_address ip)]
+        (computed-settings (get-settings :titan options))]
     (debugf "configure %s %s" settings options)
 
     (debugf "configure titan.properties")
@@ -267,6 +278,7 @@
   "Returns a server-spec that installs and configures titan."
   [settings & {:keys [instance-id] :as options}]
   (api/server-spec
+   :default-phases [:settings :install :configure]
    :phases
    (merge {:settings (plan-fn 
                       (pallet.crate.titan/settings 
